@@ -1,0 +1,176 @@
+#!/bin/bash
+# tmux-claude-hook - Hook handlers for tmux events
+# Created: 2025-08-07
+
+set -euo pipefail
+
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${SCRIPT_DIR}/../lib"
+[[ -z "${STATE_DIR:-}" ]] && readonly STATE_DIR="/tmp/tmux-claude"
+[[ -z "${LOG_FILE:-}" ]] && readonly LOG_FILE="${STATE_DIR}/hook.log"
+
+source "${LIB_DIR}/state_manager.sh"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$1] ${*:2}" >> "$LOG_FILE"
+}
+
+get_pane_command() {
+    local pane_id="$1"
+    tmux display -p -t "$pane_id" '#{pane_current_command}' 2>/dev/null || echo ""
+}
+
+is_claude_pane() {
+    local pane_id="$1"
+    local command=$(get_pane_command "$pane_id")
+    
+    # Check for Claude-related commands (including npx which often runs Claude)
+    if [[ "$command" =~ claude|claude-code|claude_code|npx ]]; then
+        return 0
+    fi
+    return 1
+}
+
+handle_new_session() {
+    local session="${1:-}"
+    log "INFO" "New session: $session"
+    
+    "${SCRIPT_DIR}/tmux-claude-monitor" status &>/dev/null || \
+        "${SCRIPT_DIR}/tmux-claude-monitor" start
+}
+
+handle_new_window() {
+    local window="${1:-}"
+    log "INFO" "New window: $window"
+    
+    if [[ -n "$window" ]]; then
+        for pane in $(tmux list-panes -t "$window" -F "#{session_name}:#{window_index}.#{pane_index}" 2>/dev/null); do
+            if is_claude_pane "$pane"; then
+                log "INFO" "Found Claude pane: $pane"
+                trigger_pane_check "$pane"
+            fi
+        done
+    fi
+}
+
+handle_new_pane() {
+    local pane="${TMUX_PANE:-}"
+    
+    if [[ -z "$pane" ]]; then
+        pane=$(tmux display -p '#{session_name}:#{window_index}.#{pane_index}')
+    fi
+    
+    log "INFO" "New pane: $pane"
+    
+    sleep 0.5
+    
+    if is_claude_pane "$pane"; then
+        log "INFO" "New Claude pane detected: $pane"
+        trigger_pane_check "$pane"
+    fi
+}
+
+handle_pane_exit() {
+    local pane="${TMUX_PANE:-}"
+    
+    if [[ -z "$pane" ]]; then
+        pane="${1:-}"
+    fi
+    
+    if [[ -n "$pane" ]]; then
+        log "INFO" "Pane exited: $pane"
+        
+        local clean_id=$(get_pane_id "$pane")
+        
+        clear_pane_status "$pane"
+        set_pane_monitored "$pane" false
+        
+        rm -f "${STATE_DIR}/${clean_id}.log"
+        rm -f "${STATE_DIR}/${clean_id}.status"
+        rm -f "${STATE_DIR}/${clean_id}.timestamp"
+        rm -f "${STATE_DIR}/${clean_id}.monitoring"
+    fi
+}
+
+handle_window_close() {
+    local window="${1:-}"
+    log "INFO" "Window closed: $window"
+    
+    if [[ -n "$window" ]]; then
+        local clean_window="${window//:/_}"
+        tmux set-environment -u "@claude_${clean_window}_status" 2>/dev/null || true
+    fi
+}
+
+handle_session_close() {
+    local session="${1:-}"
+    log "INFO" "Session closed: $session"
+    
+    for file in "${STATE_DIR}"/*.monitoring; do
+        if [[ -f "$file" ]]; then
+            local pane_id=$(basename "$file" .monitoring | tr '_' '.:' | head -c -2)
+            if [[ "${pane_id%%:*}" == "$session" ]]; then
+                handle_pane_exit "$pane_id"
+            fi
+        fi
+    done
+}
+
+trigger_pane_check() {
+    local pane_id="$1"
+    
+    if ! pgrep -f "tmux-claude-monitor" &>/dev/null; then
+        "${SCRIPT_DIR}/tmux-claude-monitor" start
+        sleep 1
+    fi
+    
+    touch "${STATE_DIR}/check_${pane_id//[:.]/_}"
+}
+
+main() {
+    mkdir -p "$STATE_DIR"
+    
+    local event="${1:-}"
+    shift || true
+    
+    case "$event" in
+        session-created|after-new-session)
+            handle_new_session "$@"
+            ;;
+        window-add|after-new-window)
+            handle_new_window "$@"
+            ;;
+        pane-add|after-new-pane)
+            handle_new_pane "$@"
+            ;;
+        pane-exited|pane-died)
+            handle_pane_exit "$@"
+            ;;
+        window-closed)
+            handle_window_close "$@"
+            ;;
+        session-closed)
+            handle_session_close "$@"
+            ;;
+        check)
+            if [[ -n "${1:-}" ]]; then
+                trigger_pane_check "$1"
+            fi
+            ;;
+        *)
+            echo "Usage: $0 <event> [args...]"
+            echo
+            echo "Events:"
+            echo "  session-created  - New session created"
+            echo "  window-add       - New window added"
+            echo "  pane-add         - New pane added"
+            echo "  pane-exited      - Pane exited"
+            echo "  window-closed    - Window closed"
+            echo "  session-closed   - Session closed"
+            echo "  check <pane>     - Trigger check for specific pane"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
