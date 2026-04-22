@@ -159,10 +159,6 @@ cache age exceeds `@window-badge-poll-interval` (default 5 s), the
 next render kicks an async refresh in the background and paints with
 the current data; the following tick picks up the fresh cache.
 
-See [`CLAUDE.md`](CLAUDE.md) for the full provider contract, merge
-rules, and the "drop an executable, get a new signal source"
-extension pattern.
-
 ## Install
 
 ### With TPM (recommended)
@@ -270,8 +266,11 @@ done
 ```
 
 The merger merges observations by priority per pane (`needs-input >
-working > new > done > idle > none`) and OR-s the ignored flag. See
-[`CLAUDE.md`](CLAUDE.md) for the full contract.
+working > new > done > idle > none`) and OR-s the ignored flag. A
+provider emitting a state outside the priority table is silently
+dropped — so any new state needs to be added to both the priority
+dict (`window_badge_refresh.sh`) and the symbols/styles maps
+(`window_badge.sh`).
 
 ## Dependencies
 
