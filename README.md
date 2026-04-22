@@ -72,6 +72,60 @@ set -g @agent-tracker-mark-emoji-key  'M'
 set -g @agent-tracker-mark-style      'fg=brightcyan,bold'
 ```
 
+### Walkthrough
+
+From a Claude pane you want to tag:
+
+```
+prefix m            → popup opens
+AR<Enter>           → mark set; status bar now shows "AR⚙" for this pane
+```
+
+Change your mind about the label:
+
+```
+prefix m            → popup shows "current: [AR]"
+<Ctrl-U>            → resets the buffer
+PR<Enter>           → mark now "PR"
+```
+
+Swap to an emoji:
+
+```
+prefix m            → popup opens
+<Ctrl-E>            → fzf picker opens
+bug                 → filter
+<Enter>             → 🐛 becomes the mark
+```
+
+Clear the mark entirely:
+
+```
+prefix m            → popup opens
+<Enter>             → empty commit clears; pane re-aggregates into counts
+```
+
+Never want to set a mark and want to reclaim `prefix + m`:
+
+```tmux
+set -g @agent-tracker-mark-key ''
+set -g @agent-tracker-mark-emoji-key ''
+```
+
+### Rendering when multiple panes are marked
+
+Marks sort alphabetically, so a window with two marked Claude panes
+and two unmarked ones renders stably across redraws regardless of
+which pane tmux activates:
+
+```
+window:            [AR:claude] [bug:claude] [claude-3] [claude-4]
+badge with marks:  AR⚙ 🐛💤 ⚙1 💤1
+```
+
+The two trailing aggregated counts cover the unmarked panes; marks
+own their own slots and never collapse into the totals.
+
 ## Architecture at a glance
 
 ```

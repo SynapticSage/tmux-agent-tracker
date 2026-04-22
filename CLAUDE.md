@@ -193,3 +193,26 @@ for any substantive change:
 6. Move the plugin to a different directory, run `install.sh` from
    the new location — old entries should vanish and new ones appear
    pointing at the new path.
+
+### Marks smoke path
+
+7. `prefix + m`, type `AR`, Enter. Badge for that window renders
+   `AR⚙` (or whatever state that pane is in). Other panes in the
+   window still aggregate into counts.
+8. Long mark: `prefix + m`, type `OPENAI` (exactly 6 chars). Popup
+   auto-commits when buffer is full; badge renders `OPENAI⚙`.
+9. Clear: `prefix + m`, Enter on empty. Mark disappears; pane
+   rejoins the aggregated counts.
+10. Emoji: `prefix + m`, Ctrl-E, filter "bug", Enter. Badge shows
+    `🐛⚙`. Confirm that typing any character before Ctrl-E discards
+    that character when the picker takes over.
+11. Two-pane window with two marks: both render individually, sorted
+    alphabetically. Activating a different pane in the window does
+    not reorder the badge (stable sort on mark text, not on active
+    state).
+12. `prefix + M` goes straight to the emoji picker without the
+    character prompt.
+13. `install.sh --dry-run --emoji --theme catppuccin` prints the
+    planned emoji fetch and (only if no theme is detected) the
+    planned plugin-line append. With onedark / catppuccin already
+    installed, the theme step auto-skips.
