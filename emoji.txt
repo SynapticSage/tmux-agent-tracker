@@ -1,0 +1,61 @@
+🐛	bug error defect crash
+✨	feature shiny new magic
+🔧	fix tool wrench config
+📝	note doc write edit
+🚀	deploy launch ship release
+🎨	style design format ui
+⚠️	warning caution alert
+🔥	hot urgent burn priority
+💡	idea insight hint tip
+🧪	test experiment lab
+🏗️	build construct scaffold
+🔍	search find investigate
+🐢	slow turtle patience waiting
+⚡	fast zap quick speed
+🛑	stop halt block
+✅	done pass check yes
+❌	no fail reject
+📦	package bundle release
+🧹	cleanup sweep refactor
+🔒	security lock auth
+🔑	key auth credential
+🌱	growth seed new branch
+🧠	ai think logic model
+👀	review watch eyes look
+💥	break boom explode crash
+⏳	waiting pending hourglass
+🗑️	delete trash remove
+📌	pin mark important
+⭐	star favorite important
+🎯	target goal focus
+💬	chat talk comment
+🔗	link connect ref
+📊	data chart stat metric
+🗂️	organize folder sort
+🕵️	investigate detective debug
+🚦	status signal traffic
+💾	save persist disk
+🧩	puzzle piece component module
+🎭	mock stub fake
+🖋️	write sign author
+🏷️	label tag name
+📚	docs manual reference
+🛠️	tools build dev
+🧵	thread concurrent parallel
+🕸️	web network graph
+🪲	insect bug small issue
+🧱	block brick wall foundation
+🌀	loop cycle spinner
+⛔	blocked banned no-entry
+🔄	refresh retry sync
+📣	announce broadcast note
+🎬	start begin action scene
+🧷	pin fasten temp
+🗺️	plan map route
+🧭	direction navigate compass
+🪣	bucket queue batch
+🧰	toolbox utility kit
+🏁	finish complete done
+💻	dev code computer
+🖥️	server desktop host
+📱	mobile device phone

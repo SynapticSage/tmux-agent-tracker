@@ -38,6 +38,40 @@ what's happening in its panes:
 
 `N` is the count of panes in that window in that state.
 
+## Per-pane marks
+
+Sometimes you want to remember which of your five Claude panes is the
+"auth refactor" and which is the "PR review" without renaming the
+window or leaving the session. Marks are short per-pane labels (1–6
+characters or a single emoji) that render alongside the state badge:
+
+```
+  no marks:            ⚙2 💤1
+  marks AUTH, BL:      AUTH⚙ BL💤 ⚙1     ← AUTH and BL each own a slot
+  mark is an emoji:    🐛⚙ ⚙1 💤1        ← picked via Ctrl-E
+```
+
+Marked panes render individually (mark + their own state symbol);
+unmarked panes still aggregate into counts.
+
+| Key          | What it does                                             |
+|--------------|----------------------------------------------------------|
+| `prefix + m` | Popup for the current pane. Type up to 6 chars + Enter to commit, Enter on empty to clear, Esc to cancel, Ctrl-U to reset, **Ctrl-E** to hand off to the emoji picker. |
+| `prefix + M` | Skip the char popup; go straight to the emoji picker.     |
+
+Marks live in the tmux pane option `@agent-mark` and persist for the
+tmux server's lifetime. They don't survive a tmux server restart.
+(Per-pane, not per-session — restoring a saved session from tmux-attic
+doesn't carry marks forward either.)
+
+Override the key bindings (or disable them entirely) via:
+
+```tmux
+set -g @agent-tracker-mark-key        'm'   # empty string = no bind
+set -g @agent-tracker-mark-emoji-key  'M'
+set -g @agent-tracker-mark-style      'fg=brightcyan,bold'
+```
+
 ## Architecture at a glance
 
 ```
@@ -106,6 +140,16 @@ that file for you. The script:
   the plugin.
 - **Backs up** `settings.json` to `.bak.<stamp>` before any write.
 - **Supports** `--dry-run`, `--yes`, `--uninstall`.
+- Offers two optional follow-on steps (pass `--no-emoji` / `--no-theme`
+  to skip):
+  - **Emoji picker** — downloads the full Unicode CLDR emoji list into
+    `emoji_full.txt` so the mark popup's Ctrl-E picker can fuzzy-match
+    by name. Without it, Ctrl-E still works against ~60 curated
+    dev-relevant emojis bundled with the plugin.
+  - **Theme** — if neither onedark nor catppuccin is already declared
+    in `~/.tmux.conf`, offers to append a `@plugin` line. The default
+    badge palette assumes a dark status bar; if yours isn't, badges
+    still work but may blend.
 
 On first source after install, the plugin prints a one-line
 `display-message` nudging you to run this if the hooks aren't
@@ -137,6 +181,10 @@ And run `install.sh` once, as above.
 | `@window-badge-poll-interval`        | integer seconds                  | `5`      | Maximum cache age before the renderer triggers an async refresh. |
 | `@window-badge-palette`              | *empty*, `fallback`              | *empty*  | Default inherits status-bar styling. `fallback` uses bg+fg color chips for readability regardless of theme. |
 | `@agent-tracker-silence-hook-nudge`  | `on`, *empty*                    | *empty*  | Suppresses the one-line nudge when Claude hooks aren't yet registered. |
+| `@agent-tracker-mark-key`            | any key or *empty*               | `m`      | `prefix`-table key that opens the mark popup. Empty disables the bind. |
+| `@agent-tracker-mark-emoji-key`      | any key or *empty*               | `M`      | `prefix`-table key that opens the emoji picker directly. |
+| `@agent-tracker-mark-style`          | tmux style string                | *auto*   | Override the mark coloring. Default: `fg=brightcyan,bold` (or fallback equivalent). |
+| `@agent-tracker-emoji-list`          | `full`, `basic`, *empty*         | *auto*   | Force `mark_emoji.sh` to read one list or the other. Auto prefers `emoji_full.txt` if present. |
 
 Set at runtime: `tmux set-option -g @window-badge-mode worst` —
 takes effect on the next status redraw, no reload required.

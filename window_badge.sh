@@ -24,6 +24,14 @@
 #                                "onedark" / "catppuccin" (hint, currently
 #                                identical to default — reserved for future
 #                                per-theme tuning)
+#   @agent-tracker-mark-style    override for the per-pane mark styling.
+#                                default: fg=brightcyan,bold (fallback palette:
+#                                bg=colour24,fg=brightwhite,bold)
+#
+# Per-pane options read (not cached — queried at render time since
+# show-options is fast and we want mark updates to appear instantly):
+#   @agent-mark                  1-6 char label or single emoji glyph
+#                                set by mark.sh / mark_emoji.sh
 
 set -euo pipefail
 
@@ -68,7 +76,21 @@ fi
 # --- Render ------------------------------------------------------------
 panes=$(tmux list-panes -t "$window_id" -F '#{pane_id}' 2>/dev/null) || { echo ""; exit 0; }
 
-PANES="$panes" BADGE_MODE="$mode" BADGE_PALETTE="${palette:-}" CACHE_FILE="$cache_file" python3 <<'PY'
+# Marks are per-pane @agent-mark options. Not routed through the provider
+# pipeline — queried synchronously here because show-options is cheap
+# (~1ms per pane) and users expect mark edits to appear on the next
+# redraw, not after a cache refresh.
+marks=$(while IFS= read -r p; do
+  if [[ -z "$p" ]]; then continue; fi
+  m=$(tmux show-options -t "$p" -pqv @agent-mark 2>/dev/null || true)
+  if [[ -n "$m" ]]; then
+    printf '%s\t%s\n' "$p" "$m"
+  fi
+done <<< "$panes") || marks=""
+
+mark_style_override=$(tmux show-option -gqv "@agent-tracker-mark-style" 2>/dev/null || true)
+
+PANES="$panes" MARKS="$marks" BADGE_MODE="$mode" BADGE_PALETTE="${palette:-}" MARK_STYLE_OVERRIDE="${mark_style_override:-}" CACHE_FILE="$cache_file" python3 <<'PY'
 import os
 
 panes = set(os.environ.get("PANES", "").split())
@@ -76,8 +98,23 @@ mode = os.environ.get("BADGE_MODE", "counts")
 palette = os.environ.get("BADGE_PALETTE", "")
 cache_file = os.environ["CACHE_FILE"]
 
+# Per-pane marks. Dict pane_id -> mark text. Only panes in this window
+# appear; mark.sh scopes writes per-pane.
+marks = {}
+for line in os.environ.get("MARKS", "").splitlines():
+    if not line or "\t" not in line:
+        continue
+    pane_id, label = line.split("\t", 1)
+    if pane_id in panes:
+        marks[pane_id] = label
+
 counts = {"needs-input": 0, "working": 0, "new": 0, "done": 0, "idle": 0}
 ignored = 0
+
+# Per-pane state lookup; kept around so marked panes can render
+# mark+symbol pairs individually instead of rolling into counts.
+pane_state = {}
+pane_ignored = {}
 
 try:
     with open(cache_file) as f:
@@ -88,6 +125,11 @@ try:
             pane_id, state, ign = parts
             if pane_id not in panes:
                 continue
+            pane_state[pane_id] = state
+            pane_ignored[pane_id] = (ign == "y")
+            # Marked panes render individually; unmarked aggregate.
+            if pane_id in marks:
+                continue
             if ign == "y":
                 ignored += 1
             elif state in counts:
@@ -95,12 +137,19 @@ try:
 except FileNotFoundError:
     pass
 
+# Marked panes with no cache entry still render (state=none) so the
+# label is visible even before any provider has observed the pane.
+for pane_id in marks:
+    pane_state.setdefault(pane_id, "none")
+    pane_ignored.setdefault(pane_id, False)
+
 symbols = {
     "needs-input": "\u2328",      # ⌨   waiting for user
     "working":     "\u2699",      # ⚙   computing
     "new":         "\u2733",      # ✳   fresh session
     "done":        "\u2713",      # ✓   finished, unseen
     "idle":        "\U0001f4a4",  # 💤  at prompt, no work
+    "none":        "",            # marked pane, no state observation yet
 }
 # Per-state tmux style overrides. Unicode symbols inherit the
 # window-status-style foreground (typically a muted gray on most
@@ -131,12 +180,38 @@ fallback_styles = {
 styles = fallback_styles if palette == "fallback" else default_styles
 ignored_style = "fg=colour244" if palette != "fallback" else "bg=colour237,fg=colour244"
 
+# Mark styling: explicit override, else palette-appropriate default.
+# Bright cyan pops against most dark bars without colliding with the
+# state symbol palette (yellow/cyan/magenta/green).
+mark_style = os.environ.get("MARK_STYLE_OVERRIDE", "")
+if not mark_style:
+    mark_style = "bg=colour24,fg=brightwhite,bold" if palette == "fallback" else "fg=brightcyan,bold"
+
 order = ["needs-input", "working", "new", "done", "idle"]
 
 def paint(style, text):
     return f"#[{style}]{text}#[default]"
 
+def mark_chunk(pane_id):
+    """Render one marked pane as mark+symbol (e.g. 'AR⚙')."""
+    label = marks[pane_id]
+    state = pane_state.get(pane_id, "none")
+    sym = symbols.get(state, "")
+    # Ignored marked panes get the muted mark style; the state symbol
+    # stays styled so you can still see what the pane is doing at a
+    # glance even though it's muted from counts.
+    ms = ignored_style if pane_ignored.get(pane_id) else mark_style
+    if sym:
+        return paint(ms, label) + paint(styles[state], sym)
+    return paint(ms, label)
+
 out = []
+
+# Marked panes first, sorted by mark text for stable ordering so the
+# status bar doesn't jitter as pane IDs shuffle between redraws.
+for pane_id in sorted(marks, key=lambda p: (marks[p], p)):
+    out.append(mark_chunk(pane_id))
+
 if mode == "worst":
     for s in order:
         if counts[s]:

@@ -16,6 +16,8 @@ set -euo pipefail
 
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BADGE_SCRIPT="$PLUGIN_DIR/window_badge.sh"
+MARK_SCRIPT="$PLUGIN_DIR/mark.sh"
+MARK_EMOJI_SCRIPT="$PLUGIN_DIR/mark_emoji.sh"
 
 # Resolve tmux. TPM sources this inside tmux, so `tmux` is on PATH,
 # but pin to absolute for anything that forks without inheriting PATH.
@@ -62,6 +64,36 @@ print(re.sub(r' *#\\([^)]*window_badge\\.sh[^)]*\\)', '', os.environ['CUR']), en
 
 wire_status_format window-status-format
 wire_status_format window-status-current-format
+
+# ---------------------------------------------------------------------
+# Key bindings for per-pane marks.
+#
+# Defaults:
+#   prefix + m   -> mark.sh popup (type 1-6 chars, Ctrl-E for emoji)
+#   prefix + M   -> mark_emoji.sh direct (skip the char prompt)
+#
+# Override via:
+#   set -g @agent-tracker-mark-key       'm'
+#   set -g @agent-tracker-mark-emoji-key 'M'
+#   set -g @agent-tracker-mark-key       ''   # disable binding
+#
+# Idempotent — binding to the same key twice is fine, tmux replaces
+# the previous binding silently. No need to track prior binds.
+# ---------------------------------------------------------------------
+bind_popup() {
+  local key="$1"
+  local script="$2"
+  [[ -z "$key" ]] && return 0
+  "$TMUX_BIN" bind-key "$key" display-popup -E -w 60 -h 14 "$script"
+}
+
+mark_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-mark-key" 2>/dev/null || true)"
+[[ -z "$mark_key" ]] && mark_key="m"
+bind_popup "$mark_key" "$MARK_SCRIPT"
+
+mark_emoji_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-mark-emoji-key" 2>/dev/null || true)"
+[[ -z "$mark_emoji_key" ]] && mark_emoji_key="M"
+bind_popup "$mark_emoji_key" "$MARK_EMOJI_SCRIPT"
 
 # ---------------------------------------------------------------------
 # First-source nudge for the Claude-hooks install step.
