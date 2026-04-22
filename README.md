@@ -38,6 +38,29 @@ what's happening in its panes:
 
 `N` is the count of panes in that window in that state.
 
+## Recon integration
+
+When `recon` ([gavraz/recon](https://github.com/gavraz/recon)) is
+installed, the plugin also provides keyboard UX for navigating and
+muting the Claude sessions it enumerates:
+
+| Key           | What it does                                                  |
+|---------------|---------------------------------------------------------------|
+| `prefix + g`  | Jump to the next non-Working agent (Idle or waiting-for-input). |
+| `prefix + C-g`| Jump only to agents waiting for input.                         |
+| `prefix + i`  | Toggle `@recon-ignore` on the focused **pane**. Muted panes drop out of cycle and move into the `∅N` bucket in the badge. |
+| `prefix + e`  | Toggle `@recon-ignore` on the focused **window** (cascades to every pane via tmux's option inheritance chain). |
+| `prefix + I`  | fzf popup: mute/unmute a non-focused **session** or **window**. |
+
+Muting shares one mechanism across the two UX halves — the toggles
+set the option, the `30-tmux-ignore.sh` provider reads it, and the
+badge renderer shows the muted count in the trailing `∅N` bucket.
+That way marking a window muted also hides it from `recon next` /
+`prefix + g` cycling.
+
+All five bindings are individually overridable or disable-able; see
+the configuration table below.
+
 ## Per-pane marks
 
 Sometimes you want to remember which of your five Claude panes is the
@@ -235,6 +258,11 @@ And run `install.sh` once, as above.
 | `@agent-tracker-mark-emoji-key`      | any key or *empty*               | `M`      | `prefix`-table key that opens the emoji picker directly. |
 | `@agent-tracker-mark-style`          | tmux style string                | *auto*   | Override the mark coloring. Default: `fg=brightcyan,bold` (or fallback equivalent). |
 | `@agent-tracker-emoji-list`          | `full`, `basic`, *empty*         | *auto*   | Force `mark_emoji.sh` to read one list or the other. Auto prefers `emoji_full.txt` if present. |
+| `@agent-tracker-recon-cycle-key`         | any key or *empty* | `g`   | Cycle to next non-Working recon agent. |
+| `@agent-tracker-recon-cycle-waiting-key` | any key or *empty* | `C-g` | Cycle only to agents waiting for input. |
+| `@agent-tracker-ignore-pane-key`         | any key or *empty* | `i`   | Toggle `@recon-ignore` on the focused pane (mutes from cycle + moves to `∅N` bucket). |
+| `@agent-tracker-ignore-window-key`       | any key or *empty* | `e`   | Toggle `@recon-ignore` on the focused window (cascades to all panes via inheritance). |
+| `@agent-tracker-ignore-picker-key`       | any key or *empty* | `I`   | fzf popup: toggle `@recon-ignore` at session/window scope for non-focused targets. |
 
 Set at runtime: `tmux set-option -g @window-badge-mode worst` —
 takes effect on the next status redraw, no reload required.

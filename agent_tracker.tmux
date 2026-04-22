@@ -18,6 +18,9 @@ PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BADGE_SCRIPT="$PLUGIN_DIR/window_badge.sh"
 MARK_SCRIPT="$PLUGIN_DIR/mark.sh"
 MARK_EMOJI_SCRIPT="$PLUGIN_DIR/mark_emoji.sh"
+RECON_CYCLE_SCRIPT="$PLUGIN_DIR/recon_cycle.sh"
+RECON_IGNORE_TOGGLE_SCRIPT="$PLUGIN_DIR/recon_ignore_toggle.sh"
+RECON_IGNORE_PICKER_SCRIPT="$PLUGIN_DIR/recon_ignore_picker.sh"
 
 # Resolve tmux. TPM sources this inside tmux, so `tmux` is on PATH,
 # but pin to absolute for anything that forks without inheriting PATH.
@@ -94,6 +97,58 @@ bind_popup "$mark_key" "$MARK_SCRIPT"
 mark_emoji_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-mark-emoji-key" 2>/dev/null || true)"
 [[ -z "$mark_emoji_key" ]] && mark_emoji_key="M"
 bind_popup "$mark_emoji_key" "$MARK_EMOJI_SCRIPT"
+
+# ---------------------------------------------------------------------
+# Key bindings for recon integration.
+#
+# Recon (https://github.com/gavraz/recon) is the upstream Rust TUI
+# that enumerates Claude sessions across the tmux server. These
+# helpers provide keyboard UX around its data:
+#
+#   prefix + g   -> cycle to next non-Working agent (Idle or waiting)
+#   prefix + C-g -> cycle only to agents waiting for input
+#   prefix + i   -> toggle @recon-ignore on the focused pane
+#   prefix + e   -> toggle @recon-ignore on the focused window
+#   prefix + I   -> fzf popup for ignoring/unignoring session or window
+#
+# The @recon-ignore option is also read by 30-tmux-ignore.sh, so
+# muting a pane/window/session correctly routes into the ∅N bucket
+# in the badge. Toggles and badge logic are two halves of one UX.
+#
+# Each binding is opt-out via the matching option set to empty:
+#   set -g @agent-tracker-recon-cycle-key ''
+# ---------------------------------------------------------------------
+bind_run() {
+  local key="$1" cmd="$2"
+  [[ -z "$key" ]] && return 0
+  "$TMUX_BIN" bind-key "$key" run-shell "$cmd"
+}
+
+bind_popup_full() {
+  local key="$1" cmd="$2"
+  [[ -z "$key" ]] && return 0
+  "$TMUX_BIN" bind-key "$key" display-popup -w 85% -h 75% -E "$cmd"
+}
+
+cycle_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-recon-cycle-key" 2>/dev/null || true)"
+[[ -z "$cycle_key" ]] && cycle_key="g"
+bind_run "$cycle_key" "$RECON_CYCLE_SCRIPT"
+
+cycle_wait_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-recon-cycle-waiting-key" 2>/dev/null || true)"
+[[ -z "$cycle_wait_key" ]] && cycle_wait_key="C-g"
+bind_run "$cycle_wait_key" "$RECON_CYCLE_SCRIPT --waiting-only"
+
+ignore_pane_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-ignore-pane-key" 2>/dev/null || true)"
+[[ -z "$ignore_pane_key" ]] && ignore_pane_key="i"
+bind_run "$ignore_pane_key" "$RECON_IGNORE_TOGGLE_SCRIPT --pane"
+
+ignore_window_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-ignore-window-key" 2>/dev/null || true)"
+[[ -z "$ignore_window_key" ]] && ignore_window_key="e"
+bind_run "$ignore_window_key" "$RECON_IGNORE_TOGGLE_SCRIPT --window"
+
+ignore_picker_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-ignore-picker-key" 2>/dev/null || true)"
+[[ -z "$ignore_picker_key" ]] && ignore_picker_key="I"
+bind_popup_full "$ignore_picker_key" "$RECON_IGNORE_PICKER_SCRIPT"
 
 # ---------------------------------------------------------------------
 # First-source nudge for the Claude-hooks install step.
