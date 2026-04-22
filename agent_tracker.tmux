@@ -23,19 +23,39 @@ TMUX_BIN="${TMUX_BIN:-$(command -v tmux || true)}"
 [[ -x "$TMUX_BIN" ]] || { echo "tmux-agent-tracker: tmux not found on PATH" >&2; exit 0; }
 
 # ---------------------------------------------------------------------
-# Status-format wiring — idempotent.
+# Status-format wiring — self-healing and idempotent.
 #
-# Each time tmux sources the config, this script runs. Using `set -ag`
-# unconditionally would re-append the `#(...)` call on every reload
-# (2×, 3× badges in the status bar). Guard by reading the current
-# value and skipping if our script is already referenced.
+# Runs on every source of the config. Writes end up as exactly one
+# `#(…window_badge.sh…)` reference per option, pointing at THIS
+# install's path, regardless of starting state. Handles:
+#
+#   1. First install (option has no badge ref) — append ours.
+#   2. Repeat source (option already has ours) — scrub + re-append
+#      is a no-op net change, but keeps the code path single.
+#   3. Plugin moved (option has a badge ref at an old path, e.g.
+#      from a dev clone now TPM-installed, or from legacy
+#      install_badges.sh marker block) — scrub stale, append ours.
+#   4. Running tmux server has stale in-memory wiring from a previous
+#      session's config (tmux `source-file` re-applies `set` directives
+#      but doesn't unset them; stale refs persist otherwise).
+#
+# The regex targets `#(…window_badge.sh…)` specifically. Using
+# `[^)]*` stops each match from crossing into other `#(…)` commands
+# in the same format string — essential because theme plugins often
+# embed their own `#(…)` commands next to ours.
 # ---------------------------------------------------------------------
 wire_status_format() {
   local option="$1"
-  local current
+  local current scrubbed
   current="$("$TMUX_BIN" show-option -gqv "$option" 2>/dev/null || true)"
-  if [[ "$current" == *"$BADGE_SCRIPT"* ]]; then
-    return 0
+
+  scrubbed=$(CUR="$current" python3 -c "
+import os, re
+print(re.sub(r' *#\\([^)]*window_badge\\.sh[^)]*\\)', '', os.environ['CUR']), end='')
+")
+
+  if [[ "$scrubbed" != "$current" ]]; then
+    "$TMUX_BIN" set-option -g "$option" "$scrubbed"
   fi
   "$TMUX_BIN" set-option -ag "$option" " #($BADGE_SCRIPT #{window_id})"
 }
