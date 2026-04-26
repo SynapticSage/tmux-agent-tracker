@@ -76,21 +76,29 @@ fi
 # --- Render ------------------------------------------------------------
 panes=$(tmux list-panes -t "$window_id" -F '#{pane_id}' 2>/dev/null) || { echo ""; exit 0; }
 
-# Marks are per-pane @agent-mark options. Not routed through the provider
-# pipeline — queried synchronously here because show-options is cheap
-# (~1ms per pane) and users expect mark edits to appear on the next
-# redraw, not after a cache refresh.
-marks=$(while IFS= read -r p; do
-  if [[ -z "$p" ]]; then continue; fi
-  m=$(tmux show-options -t "$p" -pqv @agent-mark 2>/dev/null || true)
-  if [[ -n "$m" ]]; then
-    printf '%s\t%s\n' "$p" "$m"
-  fi
-done <<< "$panes") || marks=""
+# Per-pane user metadata (mark + deferred). Resolved via the shared
+# metadata.sh helper so window_badge.sh, inbox.sh, and any future
+# surface walk the same inheritance chain. Codex round-2 sign-off
+# called this consistency out as a non-blocker but worth doing.
+# shellcheck source=metadata.sh
+source "$script_dir/metadata.sh"
+
+# Build TSV: <pane_id>\t<mark>\t<deferred> for panes in this window.
+# Resolving 3 options × N panes via the shared helper costs roughly
+# 3–12 show-options calls per pane (the inheritance walk), all cheap
+# (<1ms each) — well within tmux's status-redraw budget.
+metadata_rows=$(while IFS= read -r p; do
+  [[ -z "$p" ]] && continue
+  resolve_pane_metadata "$p"
+  # Emit the two we care about for badge rendering. Ignored is
+  # already in the cache (provider 30-tmux-ignore.sh), priority
+  # only matters for the inbox.
+  printf '%s\t%s\t%s\n' "$p" "$PANE_MARK" "$PANE_DEFERRED"
+done <<< "$panes") || metadata_rows=""
 
 mark_style_override=$(tmux show-option -gqv "@agent-tracker-mark-style" 2>/dev/null || true)
 
-PANES="$panes" MARKS="$marks" BADGE_MODE="$mode" BADGE_PALETTE="${palette:-}" MARK_STYLE_OVERRIDE="${mark_style_override:-}" CACHE_FILE="$cache_file" python3 <<'PY'
+PANES="$panes" METADATA="$metadata_rows" BADGE_MODE="$mode" BADGE_PALETTE="${palette:-}" MARK_STYLE_OVERRIDE="${mark_style_override:-}" CACHE_FILE="$cache_file" python3 <<'PY'
 import os
 
 panes = set(os.environ.get("PANES", "").split())
@@ -98,18 +106,31 @@ mode = os.environ.get("BADGE_MODE", "counts")
 palette = os.environ.get("BADGE_PALETTE", "")
 cache_file = os.environ["CACHE_FILE"]
 
-# Per-pane marks. Dict pane_id -> mark text. Only panes in this window
-# appear; mark.sh scopes writes per-pane.
-marks = {}
-for line in os.environ.get("MARKS", "").splitlines():
-    if not line or "\t" not in line:
+# Per-pane user metadata. Dict pane_id -> {"mark": str, "deferred": bool}.
+# Sourced from the metadata.sh helper at bash level (above) which
+# walks the tmux scope-inheritance chain.
+metadata = {}
+for line in os.environ.get("METADATA", "").splitlines():
+    if not line:
         continue
-    pane_id, label = line.split("\t", 1)
+    parts = line.split("\t")
+    if len(parts) != 3:
+        continue
+    pane_id, mark, deferred = parts
     if pane_id in panes:
-        marks[pane_id] = label
+        metadata[pane_id] = {
+            "mark": mark,
+            "deferred": (deferred == "on"),
+        }
+
+# Convenience aliases for the per-pane marks dict (for the existing
+# mark-rendering code paths below) and a deferred set for filtering.
+marks = {p: m["mark"] for p, m in metadata.items() if m["mark"]}
+deferred_panes = {p for p, m in metadata.items() if m["deferred"]}
 
 counts = {"needs-input": 0, "working": 0, "new": 0, "done": 0, "idle": 0}
 ignored = 0
+deferred_count = 0
 
 # Per-pane state lookup; kept around so marked panes can render
 # mark+symbol pairs individually instead of rolling into counts.
@@ -130,6 +151,14 @@ try:
             # Marked panes render individually; unmarked aggregate.
             if pane_id in marks:
                 continue
+            # Deferred panes do not contribute to the per-state counts
+            # — they render as a trailing ⏸N aggregate. Ignored
+            # similarly bumps the ∅N bucket. The two are deliberately
+            # separate so users can tell "I muted these" from "I'm
+            # deferring these intentionally."
+            if pane_id in deferred_panes:
+                deferred_count += 1
+                continue
             if ign == "y":
                 ignored += 1
             elif state in counts:
@@ -142,6 +171,11 @@ except FileNotFoundError:
 for pane_id in marks:
     pane_state.setdefault(pane_id, "none")
     pane_ignored.setdefault(pane_id, False)
+
+# Marked panes that are also deferred should render their mark with
+# the deferred styling rather than the active mark style — the
+# user has both labelled the pane AND set it aside, both signals
+# matter. Communicated by tagging the pane in the rendering loop.
 
 symbols = {
     "needs-input": "\u2328",      # ⌨   waiting for user
@@ -180,6 +214,12 @@ fallback_styles = {
 styles = fallback_styles if palette == "fallback" else default_styles
 ignored_style = "fg=colour244" if palette != "fallback" else "bg=colour237,fg=colour244"
 
+# Deferred uses a distinctly readable color from ignored: we want the
+# user to see "deferred" as still-tracked-but-not-urgent, not as
+# muted-away-and-forgotten. Cyan-tinted gray pops a half-step harder
+# than ignored's mid-gray.
+deferred_style = "fg=colour109" if palette != "fallback" else "bg=colour237,fg=colour109"
+
 # Mark styling: explicit override, else palette-appropriate default.
 # Bright cyan pops against most dark bars without colliding with the
 # state symbol palette (yellow/cyan/magenta/green).
@@ -197,10 +237,16 @@ def mark_chunk(pane_id):
     label = marks[pane_id]
     state = pane_state.get(pane_id, "none")
     sym = symbols.get(state, "")
-    # Ignored marked panes get the muted mark style; the state symbol
-    # stays styled so you can still see what the pane is doing at a
-    # glance even though it's muted from counts.
-    ms = ignored_style if pane_ignored.get(pane_id) else mark_style
+    # Mute precedence: ignored > deferred > active. Marks under each
+    # tier render with the matching style so the user sees at a glance
+    # which moderation level applies. The state symbol stays styled so
+    # you can still see what the pane is doing.
+    if pane_ignored.get(pane_id):
+        ms = ignored_style
+    elif pane_id in deferred_panes:
+        ms = deferred_style
+    else:
+        ms = mark_style
     if sym:
         return paint(ms, label) + paint(styles[state], sym)
     return paint(ms, label)
@@ -224,6 +270,12 @@ else:  # "counts"
 
 if ignored:
     out.append(paint(ignored_style, f"\u2205{ignored}"))
+
+# \u23F8 (deferred bracket) — distinct glyph from ignored's \u2205
+# so users see "intentionally deferred" vs "passively muted" at a
+# glance.
+if deferred_count:
+    out.append(paint(deferred_style, f"\u23F8{deferred_count}"))
 
 print(" ".join(out))
 PY

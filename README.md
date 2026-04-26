@@ -35,8 +35,21 @@ what's happening in its panes:
 | `✓N`   | done         | Finished response you haven't seen    | green bold    |
 | `💤N`  | idle         | Sitting at prompt, no active work     | bright white  |
 | `∅N`   | ignored      | Muted via `@recon-ignore`             | mid-gray      |
+| `⏸N`   | deferred     | Set aside via `@agent-deferred`       | cyan-gray     |
 
 `N` is the count of panes in that window in that state.
+
+**Three-tier visibility model:**
+
+| Tier      | Counted in state badges? | Trailing aggregate? | Inbox? | Cycle? |
+|-----------|--------------------------|---------------------|--------|--------|
+| active    | yes                      | —                   | yes    | yes    |
+| deferred  | no                       | `⏸N`                | yes (sorted last) | no |
+| ignored   | no                       | `∅N`                | hidden by default | no |
+
+`deferred` is "I'm intentionally setting this aside but want it
+discoverable." `ignored` is "drop it from everything." The two are
+deliberately separate.
 
 ## Recon integration
 
@@ -148,6 +161,92 @@ badge with marks:  AR⚙ 🐛💤 ⚙1 💤1
 
 The two trailing aggregated counts cover the unmarked panes; marks
 own their own slots and never collapse into the totals.
+
+## Inbox
+
+The badges tell you *which windows* have agents in which states.
+The inbox tells you *which agent to work on next*. With 8+ agents
+running, that's the harder question.
+
+The inbox lists every agent pane on the tmux server in priority
+order — top of the list is what to pick up first. Picker:
+
+```
+prefix + <inbox-key>   → fzf popup of every agent pane, sorted
+                          (top = most urgent)
+```
+
+Default inbox sort:
+
+1. **Visibility tier**: active before deferred. Ignored hidden.
+2. **`@agent-priority`** (lower number = higher priority, default
+   `100`). Walks the pane → window → session → global tmux scope
+   chain, so you can pin a whole session ahead of others with one
+   `set -t <session> @agent-priority 10`.
+3. **State priority**: needs-input → done → new → idle → working →
+   none. So a needs-input agent beats a working one at the same
+   `@agent-priority`.
+4. **Tiebreak**: session name, window index, pane index — stable
+   across redraws.
+
+### Cycling
+
+`prefix + g` and `prefix + C-g` (the recon-cycle bindings) now
+walk the inbox in order. Repeated presses are deterministic — they
+visit panes in the same priority sequence, not whatever order recon
+returned. `recon_cycle.sh` is now a thin wrapper around
+`inbox_next.sh`; both end up at the same place.
+
+### Deferred
+
+```
+prefix + <defer-pane-key>     → toggle @agent-deferred on this pane
+prefix + <defer-window-key>   → toggle @agent-deferred on the window
+```
+
+A deferred pane:
+
+- still shows up in the inbox (sorted to the bottom, dimmed style)
+- contributes to the trailing `⏸N` aggregate in the badge — not the
+  per-state counts
+- is skipped by `prefix + g` cycling
+
+This is distinct from `prefix + i` ignore: ignored panes drop
+entirely (hidden from inbox, render as `∅N`). Deferred is "park
+it but don't lose it"; ignored is "stop tracking."
+
+### Priority
+
+Set `@agent-priority N` (integer; lower = higher priority) at any
+tmux scope:
+
+```bash
+# Pin a single pane to the very top
+tmux set-option -p -t %12 @agent-priority 1
+
+# Pin a whole session
+tmux set-option -t auth @agent-priority 10
+
+# Default for unset everywhere is 100
+```
+
+A pane in the auth session inherits priority 10. If a single pane in
+that session sets `1`, that pane jumps ahead of its siblings.
+
+### Cross-agent ranking — known asymmetry
+
+Claude Code panes surface 5 distinct states (needs-input, done,
+new, idle, working) at hook latency (~10ms per transition). Codex
+panes only surface 2 states (working, idle) via spinner sampling
+at the badge poll interval (default 5s). So:
+
+- The inbox ranks Claude transitions immediately and richly.
+- Codex transitions appear after up to one poll cycle, and the
+  state vocabulary is coarser.
+
+This is a property of the upstream tools, not a plugin choice.
+Document it here so users don't expect Codex's "done" to surface
+as fast as Claude's.
 
 ## Architecture at a glance
 
@@ -263,6 +362,12 @@ And run `install.sh` once, as above.
 | `@agent-tracker-ignore-pane-key`         | any key or *empty* | `i`   | Toggle `@recon-ignore` on the focused pane (mutes from cycle + moves to `∅N` bucket). |
 | `@agent-tracker-ignore-window-key`       | any key or *empty* | `e`   | Toggle `@recon-ignore` on the focused window (cascades to all panes via inheritance). |
 | `@agent-tracker-ignore-picker-key`       | any key or *empty* | `I`   | fzf popup: toggle `@recon-ignore` at session/window scope for non-focused targets. |
+| `@agent-tracker-inbox-key`               | any key or *empty* | *unset* | fzf popup: priority-ranked list of every agent pane; pick → jump. Opt-in. |
+| `@agent-tracker-inbox-next-key`          | any key or *empty* | *unset* | Headless: jump to next agent in inbox order. (Same logic as `prefix+g`; opt-in extra binding if you want a separate key.) |
+| `@agent-tracker-defer-pane-key`          | any key or *empty* | *unset* | Toggle `@agent-deferred` on the focused pane. |
+| `@agent-tracker-defer-window-key`        | any key or *empty* | *unset* | Toggle `@agent-deferred` on the focused window (cascades). |
+| `@agent-priority`                        | integer            | `100`   | **Per-pane/window/session option** (not a key). Lower = higher inbox priority. Walks tmux's scope inheritance chain. |
+| `@agent-deferred`                        | `on` or *unset*    | *unset* | **Per-pane/window option** (not a key). Routes pane out of state counts and cycle, into the `⏸N` bucket and the bottom of the inbox. |
 
 Set at runtime: `tmux set-option -g @window-badge-mode worst` —
 takes effect on the next status redraw, no reload required.

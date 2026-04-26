@@ -21,6 +21,9 @@ MARK_EMOJI_SCRIPT="$PLUGIN_DIR/mark_emoji.sh"
 RECON_CYCLE_SCRIPT="$PLUGIN_DIR/recon_cycle.sh"
 RECON_IGNORE_TOGGLE_SCRIPT="$PLUGIN_DIR/recon_ignore_toggle.sh"
 RECON_IGNORE_PICKER_SCRIPT="$PLUGIN_DIR/recon_ignore_picker.sh"
+INBOX_PICKER_SCRIPT="$PLUGIN_DIR/inbox_picker.sh"
+INBOX_NEXT_SCRIPT="$PLUGIN_DIR/inbox_next.sh"
+DEFER_TOGGLE_SCRIPT="$PLUGIN_DIR/defer_toggle.sh"
 
 # Resolve tmux. TPM sources this inside tmux, so `tmux` is on PATH,
 # but pin to absolute for anything that forks without inheriting PATH.
@@ -149,6 +152,46 @@ bind_run "$ignore_window_key" "$RECON_IGNORE_TOGGLE_SCRIPT --window"
 ignore_picker_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-ignore-picker-key" 2>/dev/null || true)"
 [[ -z "$ignore_picker_key" ]] && ignore_picker_key="I"
 bind_popup_full "$ignore_picker_key" "$RECON_IGNORE_PICKER_SCRIPT"
+
+# ---------------------------------------------------------------------
+# Inbox + deferred (v1).
+#
+# Default: bindings are UNSET. Users opt in by setting the matching
+# option. Why no defaults: every other agent-tracker key (g, i, e,
+# I, m, M) is now bound, and the user's prefix-key surface is
+# finite. We don't claim more keys without explicit opt-in.
+#
+#   prefix + <inbox-key>          → inbox_picker.sh (fzf popup)
+#   prefix + <inbox-next-key>     → inbox_next.sh (jump to next pane
+#                                   in priority order)
+#   prefix + <defer-pane-key>     → defer_toggle.sh --pane
+#   prefix + <defer-window-key>   → defer_toggle.sh --window
+#
+# Recommended bindings (set in your tmux.conf):
+#   set -g @agent-tracker-inbox-key        '?'
+#   set -g @agent-tracker-defer-pane-key   'D'
+#
+# The `recon_cycle.sh` keybindings (g, C-g) are now thin wrappers
+# around inbox_next.sh — same priority order, no separate keys
+# needed for inbox-next.
+# ---------------------------------------------------------------------
+bind_popup() {
+  local key="$1" cmd="$2"
+  [[ -z "$key" ]] && return 0
+  "$TMUX_BIN" bind-key "$key" display-popup -E -w 70 -h 18 "$cmd"
+}
+
+inbox_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-inbox-key" 2>/dev/null || true)"
+bind_popup "$inbox_key" "$INBOX_PICKER_SCRIPT"
+
+inbox_next_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-inbox-next-key" 2>/dev/null || true)"
+bind_run "$inbox_next_key" "$INBOX_NEXT_SCRIPT"
+
+defer_pane_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-defer-pane-key" 2>/dev/null || true)"
+bind_run "$defer_pane_key" "$DEFER_TOGGLE_SCRIPT --pane"
+
+defer_window_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-defer-window-key" 2>/dev/null || true)"
+bind_run "$defer_window_key" "$DEFER_TOGGLE_SCRIPT --window"
 
 # ---------------------------------------------------------------------
 # First-source nudge for the Claude-hooks install step.
