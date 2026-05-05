@@ -391,7 +391,7 @@ set -g @agent-tracker-summarize-cmd \
 │   writes TSV cache   │
 └───────▲──────────────┘
         │
-        ├── 10-claude-hooks.sh   ← TMUX_BADGE_PANE_*_STATE env vars
+        ├── 10-agent-hooks.sh    ← TMUX_BADGE_PANE_*_STATE env vars
         ├── 20-recon.sh          ← `recon json` (if installed)
         ├── 30-tmux-ignore.sh    ← @recon-ignore option inheritance
         ├── 40-codex.sh          ← ps + tmux capture-pane sampling
