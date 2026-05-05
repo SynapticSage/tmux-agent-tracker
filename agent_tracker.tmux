@@ -24,6 +24,7 @@ RECON_IGNORE_PICKER_SCRIPT="$PLUGIN_DIR/recon_ignore_picker.sh"
 INBOX_PICKER_SCRIPT="$PLUGIN_DIR/inbox_picker.sh"
 INBOX_NEXT_SCRIPT="$PLUGIN_DIR/inbox_next.sh"
 DEFER_TOGGLE_SCRIPT="$PLUGIN_DIR/defer_toggle.sh"
+SUMMARIZE_SCRIPT="$PLUGIN_DIR/summarize_titles.sh"
 
 # Resolve tmux. TPM sources this inside tmux, so `tmux` is on PATH,
 # but pin to absolute for anything that forks without inheriting PATH.
@@ -192,6 +193,47 @@ bind_run "$defer_pane_key" "$DEFER_TOGGLE_SCRIPT --pane"
 
 defer_window_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-defer-window-key" 2>/dev/null || true)"
 bind_run "$defer_window_key" "$DEFER_TOGGLE_SCRIPT --window"
+
+# ---------------------------------------------------------------------
+# Pane-title summarization.
+#
+# summarize_titles.sh reads the badge cache to discover agent panes,
+# captures their scrollback, calls a configurable inference backend,
+# and writes results into the per-pane option `@agent-title` (so
+# Claude/Codex's OSC 2 title spam doesn't clobber them). Render via
+# `pane-border-format` — see README.
+#
+# Defaults:
+#   prefix + T   -> --scope window (current window's agent panes only)
+#
+# Server-scope and pane-scope are unbound by default — opt in:
+#   set -g @agent-tracker-summarize-server-key 'S'
+#   set -g @agent-tracker-summarize-pane-key   't'
+#
+# Disable window-scope default:
+#   set -g @agent-tracker-summarize-window-key 'off'
+#
+# Backend (complete invocation, content on stdin):
+#   set -g @agent-tracker-summarize-cmd \
+#     'claude --bare -p "In 1-3 words describe the task. No punctuation."'
+# ---------------------------------------------------------------------
+summarize_win_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-summarize-window-key" 2>/dev/null || true)"
+[[ -z "$summarize_win_key" ]] && summarize_win_key="T"
+# Always unbind the default first so 'off' and key changes take effect on reload.
+"$TMUX_BIN" unbind-key -q "T" 2>/dev/null || true
+if [[ "$summarize_win_key" != "off" ]]; then
+  bind_run "$summarize_win_key" "$SUMMARIZE_SCRIPT --scope window"
+fi
+
+summarize_server_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-summarize-server-key" 2>/dev/null || true)"
+if [[ -n "$summarize_server_key" && "$summarize_server_key" != "off" ]]; then
+  bind_run "$summarize_server_key" "$SUMMARIZE_SCRIPT --scope server --yes"
+fi
+
+summarize_pane_key="$("$TMUX_BIN" show-option -gqv "@agent-tracker-summarize-pane-key" 2>/dev/null || true)"
+if [[ -n "$summarize_pane_key" && "$summarize_pane_key" != "off" ]]; then
+  bind_run "$summarize_pane_key" "$SUMMARIZE_SCRIPT --scope pane"
+fi
 
 # ---------------------------------------------------------------------
 # First-source nudge for the Claude-hooks install step.

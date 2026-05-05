@@ -215,6 +215,42 @@ This is distinct from `prefix + i` ignore: ignored panes drop
 entirely (hidden from inbox, render as `∅N`). Deferred is "park
 it but don't lose it"; ignored is "stop tracking."
 
+### Recommended binding sets
+
+Inbox / defer / summarize keys are unset by default — they're opt-in
+because every tmux user's prefix-key surface is already crowded by
+the time they install another plugin. Two coherent starter sets are
+documented below; pick whichever doesn't collide with your existing
+muscle memory. (Or roll your own — every key here is just an option.)
+
+**Set A — pause-themed.** Reads naturally if your prefix surface is
+mostly free.
+
+```tmux
+set -g @agent-tracker-defer-pane-key       'P'   # Pause this pane
+set -g @agent-tracker-defer-window-key     'F'   # Freeze whole window
+set -g @agent-tracker-inbox-key            '?'   # what's next?
+set -g @agent-tracker-summarize-server-key 'Y'   # Yes, summarize all
+```
+
+Conflicts to watch for: `P` and `F` are unclaimed in vanilla tmux,
+but several session/resurrect plugins reach for them. `Y` is rare
+in tmux configs but trivially overrideable if it bites.
+
+**Set B — visual-metaphor.** Reads naturally if `P`/`F`/`Y` are
+already claimed by other plugins.
+
+```tmux
+set -g @agent-tracker-defer-pane-key       '_'   # underscore = lowered/aside
+set -g @agent-tracker-defer-window-key     'Z'   # zzz the whole window
+set -g @agent-tracker-inbox-key            '?'
+set -g @agent-tracker-summarize-server-key 'Q'   # Quick summary, all
+```
+
+Both sets agree on `?` for the inbox popup — that one rarely
+conflicts (tmux's default `prefix + ?` is `list-keys -N`, which
+most users don't reach for explicitly).
+
 ### Priority
 
 Set `@agent-priority N` (integer; lower = higher priority) at any
@@ -247,6 +283,94 @@ at the badge poll interval (default 5s). So:
 This is a property of the upstream tools, not a plugin choice.
 Document it here so users don't expect Codex's "done" to surface
 as fast as Claude's.
+
+## Pane title summarization
+
+`prefix+T` walks every agent pane in the current window, captures recent
+scrollback, asks an inference backend for a 1-3 word topic, and writes
+the result into a per-pane option `@agent-title`. Render that option in
+your pane border:
+
+```tmux
+set -g pane-border-status top
+set -g pane-border-format "#{pane_index}.#{?#{@agent-title},#{@agent-title},#{pane_title}}"
+```
+
+**Why an option, not `pane_title`?** Claude Code and Codex emit OSC 2
+("set window title") on every render, which would overwrite a
+`select-pane -T` value within ~1 second. `@agent-title` is in tmux's
+namespace — the pty can't touch it — so summaries stick.
+
+### Invoking
+
+```bash
+# Current window (default keybinding: prefix+T)
+./summarize_titles.sh --scope window
+
+# All agent panes on the server (skips interactive confirmation)
+./summarize_titles.sh --scope server --yes
+
+# Active pane only
+./summarize_titles.sh --scope pane
+
+# Preview what would be summarized — no inference calls
+./summarize_titles.sh --dry-run
+```
+
+### Keybinding configuration
+
+```tmux
+# window-scope is bound to T by default; disable with:
+set -g @agent-tracker-summarize-window-key 'off'
+
+# opt in to server-scope (prefix+S = all agent panes, server-wide):
+set -g @agent-tracker-summarize-server-key 'S'
+
+# opt in to pane-scope:
+set -g @agent-tracker-summarize-pane-key   't'
+```
+
+### Backends
+
+Set `@agent-tracker-summarize-cmd` to the **complete invocation**. Pane
+content is always piped to stdin. The command should write a short title
+to stdout.
+
+| Backend       | `set -g @agent-tracker-summarize-cmd` value |
+| ------------- | ------------------------------------------- |
+| Claude (default) | *(built-in — uses `@agent-tracker-summarize-model`)* |
+| Codex         | `codex exec --no-git "In 1-3 words describe the task. No punctuation."` |
+| summarize     | `summarize --prompt "In 1-3 words describe the task. No punctuation." -` |
+| Fabric        | `fabric -p summarize` *(pattern must exist in `~/.config/fabric/patterns/summarize/`)* |
+| Ollama/local  | `ollama run llama3.2 "In 1-3 words describe the task. No punctuation."` |
+
+`--no-git` (codex exec) suppresses repo-rule loading.
+
+> **Note on `--bare`:** Claude's `--bare` flag forces API-key auth and
+> skips OAuth/keychain — it breaks Max-subscription users. The default
+> command does not use it.
+
+### Tuning
+
+```tmux
+# Model for the built-in claude backend (alias or full name).
+# Default: claude-haiku-4-5-20251001 (fast, cheap, sufficient for 1-3 words).
+set -g @agent-tracker-summarize-model haiku   # or 'sonnet', 'claude-opus-4-7', etc.
+
+# History fallback depth (alternate-screen capture is unbounded)
+set -g @agent-tracker-summarize-lines 200
+
+# Word-boundary truncation limit for pane titles
+set -g @agent-tracker-summarize-max-title-chars 24
+```
+
+To use a fully custom command (different backend or extra flags), override
+the whole invocation:
+
+```tmux
+set -g @agent-tracker-summarize-cmd \
+  'claude --model claude-sonnet-4-6 -p "In 1-3 words describe the task. No punctuation."'
+```
 
 ## Architecture at a glance
 
