@@ -372,6 +372,29 @@ set -g @agent-tracker-summarize-cmd \
   'claude --model claude-sonnet-4-6 -p "In 1-3 words describe the task. No punctuation."'
 ```
 
+### Debugging "N failed" messages
+
+If `prefix+T` reports failures, tail the log to see *why* each pane failed:
+
+```bash
+tail -f /tmp/tmux-agent-tracker-summarize-$(id -u).log
+```
+
+Each line is `HH:MM:SS [phase] details`, where phase is one of `run`,
+`capture`, `ok`, `skip`, `fail`. Failures include the inference command's
+exit code and stderr (truncated to 400 bytes), which is normally
+swallowed by the parallel subshell. Most common causes:
+
+- **Backend not on PATH** — `claude: command not found`. Run-shell
+  inherits a minimal PATH. Set `@agent-tracker-summarize-cmd` to the
+  absolute binary path, e.g. `/Users/you/.claude/local/claude --model haiku -p "..."`.
+- **Auth required** — `claude` exits non-zero with an OAuth prompt.
+  Run `claude auth login` once at a regular shell.
+- **Rate limit / quota** — visible in the stderr field.
+
+Disable logging by setting `@agent-tracker-summarize-log off`, or point
+it elsewhere with a path value.
+
 ## Architecture at a glance
 
 ```

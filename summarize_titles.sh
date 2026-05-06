@@ -18,6 +18,8 @@
 #   @agent-tracker-summarize-cmd              full inference invocation
 #   @agent-tracker-summarize-lines            scrollback depth (history fallback)
 #   @agent-tracker-summarize-max-title-chars  word-boundary truncation limit
+#   @agent-tracker-summarize-log              log file path; 'off' to disable
+#                                             (default /tmp/tmux-agent-tracker-summarize-<uid>.log)
 
 set -euo pipefail
 
@@ -66,6 +68,18 @@ fi
 
 max_chars=$("$TMUX_BIN" show-option -gqv "@agent-tracker-summarize-max-title-chars" 2>/dev/null || true)
 max_chars="${max_chars:-24}"
+
+# ---------------------------------------------------------------------------
+# Logging — write per-pane diagnostics to a single append-mode file so users
+# can see *why* a summarize call failed (eval errors are otherwise swallowed
+# by the inference subshell). Disabled by setting the option to 'off'.
+# ---------------------------------------------------------------------------
+log_file=$("$TMUX_BIN" show-option -gqv "@agent-tracker-summarize-log" 2>/dev/null || true)
+log_file="${log_file:-/tmp/tmux-agent-tracker-summarize-$(id -u).log}"
+log() {
+  [[ "$log_file" == "off" ]] && return 0
+  printf '%s [%s] %s\n' "$(date +%H:%M:%S)" "${1:-info}" "${2:-}" >> "$log_file" 2>/dev/null || true
+}
 
 # ---------------------------------------------------------------------------
 # Cache setup — mirrors window_badge.sh:59-74 sync-on-miss logic
@@ -194,6 +208,8 @@ fi
 # ---------------------------------------------------------------------------
 "$TMUX_BIN" display-message "summarize-titles: summarizing $total pane(s)..." 2>/dev/null || true
 
+log "run" "scope=$scope panes=$total cmd=$cmd"
+
 result_dir=$(mktemp -d)
 trap 'rm -rf "$result_dir"' EXIT
 
@@ -210,23 +226,42 @@ for p in "${filtered[@]}"; do
   (
     content=$(capture_content "$p")
     if [[ -z "$content" ]]; then
+      log "skip" "pane=$p reason=empty-capture"
       touch "$result_dir/skip_${p//%/_}"
       exit 0
     fi
+    log "capture" "pane=$p chars=${#content}"
 
     # Inference: the full invocation is eval-ed so the user's option value can
     # include flags, quoted strings, and pipeline stages.  $cmd is a tmux
     # option set by the server owner — same trust level as any run-shell hook.
-    title=$(printf '%s' "$content" | eval "$cmd" 2>/dev/null) || {
+    # Capture stderr + exit code separately so we can log eval failures
+    # rather than swallowing them. `if ...; then` form is required:
+    # `title=$(...); rc=$?` would trip errexit on the assignment line and
+    # kill the subshell silently before logging or touching fail_*.
+    err_file="$result_dir/err_${p//%/_}"
+    if title=$(printf '%s' "$content" | eval "$cmd" 2>"$err_file"); then
+      rc=0
+    else
+      rc=$?
+      err_head=$(head -c 400 "$err_file" 2>/dev/null | tr '\n' ' ')
+      # Many CLIs write the actual error to stdout, not stderr (claude's
+      # "Credit balance is too low" being a notable example). On failure,
+      # log both streams so the user has at least one chance of seeing
+      # the real cause without having to add their own debugging.
+      out_head=$(printf '%s' "$title" | head -c 400 | tr '\n' ' ')
+      log "fail" "pane=$p eval-rc=$rc stdout=${out_head:-<empty>} stderr=${err_head:-<empty>}"
       touch "$result_dir/fail_${p//%/_}"
       exit 0
-    }
+    fi
 
     # Take only the first non-empty output line; word-boundary truncate.
     title=$(printf '%s' "$title" | grep -m1 . | tr -d '\r' || true)
     title=$(truncate_title "$title" "$max_chars")
 
     if [[ -z "$title" ]]; then
+      err_head=$(head -c 200 "$err_file" 2>/dev/null | tr '\n' ' ')
+      log "skip" "pane=$p reason=empty-output eval-stderr=${err_head:-<empty>}"
       touch "$result_dir/skip_${p//%/_}"
       exit 0
     fi
@@ -235,9 +270,14 @@ for p in "${filtered[@]}"; do
     # owned by whichever side emits OSC 2 last, and Claude/Codex emit it
     # continuously — so `select-pane -T` flickers on for one render and
     # then loses. `@agent-title` is ours alone; render via pane-border-format.
-    "$TMUX_BIN" set-option -p -t "$p" '@agent-title' "$title" 2>/dev/null \
-      && printf '%s\t%s\n' "$p" "$title" > "$result_dir/ok_${p//%/_}" \
-      || touch "$result_dir/fail_${p//%/_}"
+    if "$TMUX_BIN" set-option -p -t "$p" '@agent-title' "$title" 2>>"$err_file"; then
+      log "ok" "pane=$p title=$title"
+      printf '%s\t%s\n' "$p" "$title" > "$result_dir/ok_${p//%/_}"
+    else
+      err_head=$(head -c 400 "$err_file" 2>/dev/null | tr '\n' ' ')
+      log "fail" "pane=$p set-option-failed stderr=${err_head:-<empty>}"
+      touch "$result_dir/fail_${p//%/_}"
+    fi
   ) &
   pids+=($!)
 done
