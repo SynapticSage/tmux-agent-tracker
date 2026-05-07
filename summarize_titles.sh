@@ -81,6 +81,10 @@ log() {
   printf '%s [%s] %s\n' "$(date +%H:%M:%S)" "${1:-info}" "${2:-}" >> "$log_file" 2>/dev/null || true
 }
 
+# Always log start-of-run so an empty log unambiguously means "nothing ran"
+# (e.g. the wrapper or keybinding never invoked the script).
+log "start" "pid=$$ scope=$scope cwd=$(pwd)"
+
 # ---------------------------------------------------------------------------
 # Cache setup — mirrors window_badge.sh:59-74 sync-on-miss logic
 # ---------------------------------------------------------------------------
@@ -178,6 +182,7 @@ total="${#filtered[@]}"
 # Early exits
 # ---------------------------------------------------------------------------
 if [[ "$total" -eq 0 ]]; then
+  log "end" "scope=$scope panes=0 reason=no-candidates-in-scope candidates_total=${#candidates[@]}"
   "$TMUX_BIN" display-message "summarize-titles: no agent panes in scope" 2>/dev/null || true
   exit 0
 fi
@@ -240,7 +245,10 @@ for p in "${filtered[@]}"; do
     # `title=$(...); rc=$?` would trip errexit on the assignment line and
     # kill the subshell silently before logging or touching fail_*.
     err_file="$result_dir/err_${p//%/_}"
-    if title=$(printf '%s' "$content" | eval "$cmd" 2>"$err_file"); then
+    # Unset ANTHROPIC_API_KEY for the inference call so `claude` falls back
+    # to OAuth/Max-subscription auth. Users who want to force the API path
+    # for a script-managed key can override the cmd to re-export it.
+    if title=$(printf '%s' "$content" | (unset ANTHROPIC_API_KEY; eval "$cmd") 2>"$err_file"); then
       rc=0
     else
       rc=$?
@@ -311,6 +319,18 @@ mv "$tmp_prov" "$provenance_file"
 titled=$(find "$result_dir" -maxdepth 1 -name 'ok_*'   2>/dev/null | wc -l | tr -d ' ')
 skipped=$(find "$result_dir" -maxdepth 1 -name 'skip_*' 2>/dev/null | wc -l | tr -d ' ')
 failed=$(find "$result_dir"  -maxdepth 1 -name 'fail_*' 2>/dev/null | wc -l | tr -d ' ')
-"$TMUX_BIN" display-message \
-  "summarize-titles: ${titled} titled, ${skipped} skipped, ${failed} failed" \
-  2>/dev/null || true
+
+# Bracket each run with an end marker so multi-run logs are visually distinct.
+log "end" "titled=$titled skipped=$skipped failed=$failed"
+
+# Point at the log file whenever something didn't go cleanly. Keeps the happy
+# path quiet but makes failures self-discoverable.
+if [[ "$failed" -gt 0 || "$skipped" -gt 0 ]] && [[ "$log_file" != "off" ]]; then
+  "$TMUX_BIN" display-message \
+    "summarize-titles: ${titled} titled, ${skipped} skipped, ${failed} failed — see $log_file" \
+    2>/dev/null || true
+else
+  "$TMUX_BIN" display-message \
+    "summarize-titles: ${titled} titled, ${skipped} skipped, ${failed} failed" \
+    2>/dev/null || true
+fi
